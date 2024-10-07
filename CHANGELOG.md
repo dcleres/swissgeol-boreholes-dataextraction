@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## v1.0.7 - 2024-10-07
+
 ### Changed
 
 
