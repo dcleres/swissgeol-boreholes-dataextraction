@@ -48,15 +48,15 @@ def test_create_pngs_success(test_client: TestClient, s3_client, upload_test_pdf
     response = test_client.post("/api/V1/create_pngs", json={"filename": TEST_PDF_KEY.rsplit("/", 1)[-1]})
     assert response.status_code == 200
     json_response = response.json()
-    assert "png_urls" in json_response
-    assert len(json_response["png_urls"]) > 0
+    assert "key" in json_response
+    assert len(json_response["key"]) > 0
 
     # Verify that PNG files are uploaded to S3
-    for png_url in json_response["png_urls"]:
+    for s3_key in json_response["key"]:
         try:
-            s3_client.head_object(Bucket=config.test_bucket_name, Key=png_url)
+            s3_client.head_object(Bucket=config.test_bucket_name, Key=s3_key)
         except ClientError:
-            pytest.fail(f"PNG file {png_url} not found in S3.")
+            pytest.fail(f"PNG file {s3_key} not found in S3.")
 
 
 def test_create_pngs_invalid_filename(test_client: TestClient):
