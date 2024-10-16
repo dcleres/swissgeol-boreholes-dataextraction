@@ -13,6 +13,7 @@ running the tests.
 from pathlib import Path
 
 import pytest
+import regex
 from app.common.config import config
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
@@ -48,15 +49,24 @@ def test_create_pngs_success(test_client: TestClient, s3_client, upload_test_pdf
     response = test_client.post("/api/V1/create_pngs", json={"filename": TEST_PDF_KEY.rsplit("/", 1)[-1]})
     assert response.status_code == 200
     json_response = response.json()
+
     assert "key" in json_response
     assert len(json_response["key"]) > 0
 
-    # Verify that PNG files are uploaded to S3
+    expected_key_pattern = r"^dataextraction/[\w-]+\.png$"
+    expected_page_count = 1  # Adjust this based on your test PDF
+
+    assert (
+        len(json_response["key"]) == expected_page_count
+    ), f"Expected {expected_page_count} keys, but got {len(json_response['key'])}"
+
+    # Verify that PNG files are uploaded to S3 and keys follow the expected pattern
     for s3_key in json_response["key"]:
+        assert regex.match(expected_key_pattern, s3_key), f"Key {s3_key} does not match the expected pattern"
         try:
             s3_client.head_object(Bucket=config.test_bucket_name, Key=s3_key)
         except ClientError:
-            pytest.fail(f"PNG file {s3_key} not found in S3.")
+            pytest.fail(f"PNG file {s3_key} not found in S3 bucket {config.test_bucket_name}.")
 
 
 def test_create_pngs_invalid_filename(test_client: TestClient):
