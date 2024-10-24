@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from datetime import date as dt
 from datetime import datetime
+from pathlib import Path
 
 import fitz
 import numpy as np
@@ -25,7 +26,7 @@ MAX_DEPTH = 200  # Maximum depth of the groundwater in meters - Otherwise, depth
 
 
 @dataclass
-class GroundwaterInformation(metaclass=abc.ABCMeta):
+class Groundwater(metaclass=abc.ABCMeta):
     """Abstract class for Groundwater Information."""
 
     depth: float  # Depth of the groundwater relative to the surface
@@ -49,15 +50,10 @@ class GroundwaterInformation(metaclass=abc.ABCMeta):
         Returns:
             str: The object as a string.
         """
-        return (
-            f"GroundwaterInformation("
-            f"date={self.format_date()}, "
-            f"depth={self.depth}, "
-            f"elevation={self.elevation})"
-        )
+        return f"Groundwater(" f"date={self.format_date()}, " f"depth={self.depth}, " f"elevation={self.elevation})"
 
     @staticmethod
-    def from_json_values(depth: float | None, date: str | None, elevation: float | None):
+    def from_json_values(depth: float | None, date: str | None, elevation: float | None) -> "Groundwater":
         """Converts the object from a dictionary.
 
         Args:
@@ -66,10 +62,10 @@ class GroundwaterInformation(metaclass=abc.ABCMeta):
             elevation (float | None): The elevation of the groundwater.
 
         Returns:
-            GroundwaterInformation: The object created from the dictionary.
+            Groundwater: The object created from the dictionary.
         """
         date = datetime.strptime(date, DATE_FORMAT).date() if date is not None and date != "" else None
-        return GroundwaterInformation(depth=depth, date=date, elevation=elevation)
+        return Groundwater(depth=depth, date=date, elevation=elevation)
 
     def format_date(self) -> str | None:
         """Formats the date of the groundwater measurement.
@@ -82,12 +78,24 @@ class GroundwaterInformation(metaclass=abc.ABCMeta):
         else:
             return None
 
+    def to_json(self) -> dict:
+        """Converts the object to a dictionary.
+
+        Returns:
+            dict: The object as a dictionary.
+        """
+        return {
+            "date": self.format_date(),
+            "depth": self.depth,
+            "elevation": self.elevation,
+        }
+
 
 @dataclass(kw_only=True)
-class GroundwaterInformationOnPage(ExtractedFeature):
+class GroundwaterOnPage(ExtractedFeature):
     """Abstract class for Groundwater Information."""
 
-    groundwater: GroundwaterInformation
+    groundwater: Groundwater
 
     def is_valid(self) -> bool:
         """Checks if the information is valid.
@@ -112,7 +120,7 @@ class GroundwaterInformationOnPage(ExtractedFeature):
         }
 
     @classmethod
-    def from_json(cls, json_groundwater_information_on_page: dict) -> "GroundwaterInformationOnPage":
+    def from_json(cls, json_groundwater_information_on_page: dict) -> "GroundwaterOnPage":
         """Converts a dictionary to an object.
 
         Args:
@@ -122,8 +130,8 @@ class GroundwaterInformationOnPage(ExtractedFeature):
         Returns:
             GroundwaterInformationOnPage: The groundwater information on a page object.
         """
-        return GroundwaterInformationOnPage(
-            groundwater=GroundwaterInformation.from_json_values(
+        return GroundwaterOnPage(
+            groundwater=Groundwater.from_json_values(
                 depth=json_groundwater_information_on_page["depth"],
                 date=json_groundwater_information_on_page["date"],
                 elevation=json_groundwater_information_on_page["elevation"],
@@ -131,6 +139,51 @@ class GroundwaterInformationOnPage(ExtractedFeature):
             page=json_groundwater_information_on_page["page"],
             rect=fitz.Rect(json_groundwater_information_on_page["rect"]),
         )
+
+
+@dataclass
+class GroundwaterInDocument:
+    """Class for extracted groundwater information from a document."""
+
+    groundwater: list[GroundwaterOnPage]
+    filename: str
+
+    @classmethod
+    def from_document(cls, doc: fitz.Document, terrain_elevation: Elevation | None = None) -> "GroundwaterInDocument":
+        """Initializes the GroundwaterInDocument object and extracts the groundwater from the document.
+
+        Args:
+            doc (fitz.Document): The PDF document.
+            terrain_elevation (Elevation | None): The elevation of the terrain.
+
+        Returns:
+            GroundwaterInDocument: The extracted groundwater information from the document.
+        """
+        groundwater: list[GroundwaterOnPage] = []
+        filename = Path(doc.name).name
+
+        groundwater_extractor = GroundwaterLevelExtractor(document=doc)
+        groundwater_in_doc = groundwater_extractor.extract_groundwater(terrain_elevation)
+
+        groundwater.extend(groundwater_in_doc)
+
+        return GroundwaterInDocument(groundwater=groundwater, filename=filename)
+
+    def get_groundwater_in_doc(self) -> list[Groundwater]:
+        """Returns the groundwater information in the document.
+
+        Returns:
+            list[Groundwater]: The groundwater information in the document.
+        """
+        return [entry.groundwater for entry in self.groundwater]
+
+    def get_groundwater_per_page(self) -> list[GroundwaterOnPage]:
+        """Returns the groundwater information in the document.
+
+        Returns:
+            list[GroundwaterOnPage]: The groundwater information in the document.
+        """
+        return self.groundwater
 
 
 class GroundwaterLevelExtractor(DataExtractor):
@@ -155,7 +208,7 @@ class GroundwaterLevelExtractor(DataExtractor):
         if self.is_searching_groundwater_illustration:
             logger.info("Searching for groundwater information in illustrations.")
 
-    def get_groundwater_near_key(self, lines: list[TextLine], page: int) -> list[GroundwaterInformationOnPage]:
+    def get_groundwater_near_key(self, lines: list[TextLine], page: int) -> list[GroundwaterOnPage]:
         """Find groundwater information from text lines that are close to an explicit "groundwater" label.
 
         Also apply some preprocessing to the text of those text lines, to deal with some common (OCR) errors.
@@ -165,7 +218,7 @@ class GroundwaterLevelExtractor(DataExtractor):
             page (int): the page number (1-based) of the PDF document
 
         Returns:
-            list[GroundwaterInformationOnPage]: all found groundwater information
+            list[GroundwaterOnPage]: all found groundwater information
         """
         # find the key that indicates the groundwater information
         groundwater_key_lines = self.find_feature_key(lines)
@@ -190,14 +243,14 @@ class GroundwaterLevelExtractor(DataExtractor):
 
         return extracted_groundwater_list
 
-    def get_groundwater_info_from_lines(self, lines: list[TextLine], page: int) -> GroundwaterInformationOnPage:
+    def get_groundwater_info_from_lines(self, lines: list[TextLine], page: int) -> GroundwaterOnPage:
         """Extracts the groundwater information from a list of text lines.
 
         Args:
             lines (list[TextLine]): the lines of text to extract the groundwater information from
             page (int): the page number (1-based) of the PDF document
         Returns:
-            GroundwaterInformationOnPage: the extracted groundwater information
+            GroundwaterOnPage: the extracted groundwater information
         """
         date: dt | None = None
         depth: float | None = None
@@ -282,15 +335,15 @@ class GroundwaterLevelExtractor(DataExtractor):
         #   # TODO: IF the date is not provided for the groundwater (most of the time because there was only one
         # drilling date - chose the date of the document. Date needs to be extracted from the document separately)
         if depth or elevation:
-            return GroundwaterInformationOnPage(
-                groundwater=GroundwaterInformation(depth=depth, date=date, elevation=elevation),
+            return GroundwaterOnPage(
+                groundwater=Groundwater(depth=depth, date=date, elevation=elevation),
                 rect=rect_union,
                 page=page,
             )
         else:
             raise ValueError("Could not extract all required information from the lines provided.")
 
-    def extract_groundwater(self, terrain_elevation: Elevation | None) -> list[GroundwaterInformationOnPage]:
+    def extract_groundwater(self, terrain_elevation: Elevation | None) -> list[GroundwaterOnPage]:
         """Extracts the groundwater information from a borehole profile.
 
         Processes the borehole profile page by page and tries to find the coordinates in the respective text of the
@@ -302,7 +355,7 @@ class GroundwaterLevelExtractor(DataExtractor):
             terrain_elevation (ElevationInformation | None): The elevation of the borehole.
 
         Returns:
-            list[GroundwaterInformationOnPage]: the extracted coordinates (if any)
+            list[GroundwaterOnPage]: the extracted coordinates (if any)
         """
         for page in self.doc:
             lines = extract_text_lines(page)
